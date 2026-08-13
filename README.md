@@ -82,8 +82,26 @@ Use this if you want to step away and come back without losing in-container shel
 ```bash
 ./scripts/start.sh    # start (or resume) the named container in the background
 ./scripts/attach.sh   # get a shell inside it, then run: claude --dangerously-skip-permissions
-./scripts/stop.sh      # tear it down when you're done
+./scripts/stop.sh     # tear it down when you're done
 ```
+
+## Keeping Claude Code current
+
+The image is not self-updating. `npm install -g @anthropic-ai/claude-code` in the `Containerfile` runs once, at build time — whatever version was current on npm at that moment gets frozen into that image layer permanently. Nothing inside a running or stopped container checks for a newer release.
+
+A plain rebuild won't fix this either, because Podman caches build layers by instruction. If nothing above the `npm install` line in the `Containerfile` changed, the build reuses the cached layer (`Using cache`) instead of re-running it — so rebuilding repeatedly can silently keep serving the exact same Claude Code version indefinitely.
+
+To force a genuine update:
+
+```bash
+# Re-runs every step fresh, including the npm install - guarantees current Claude Code
+podman build --no-cache -t claude-code-sandbox -f ./podman/Containerfile ./podman
+
+# Also re-checks for a newer node:22 base image, not just Claude Code
+podman build --no-cache --pull -t claude-code-sandbox -f ./podman/Containerfile ./podman
+```
+
+Worth running this periodically — e.g., before a significant work session, or as a first troubleshooting step if something behaves unexpectedly, to rule out "stale cached version" before debugging further.
 
 ## Notes
 
@@ -92,6 +110,7 @@ Use this if you want to step away and come back without losing in-container shel
 - Both the one-off and persistent workflows build from the same `Containerfile`, so the container itself is identical either way — the only difference is whether it's torn down on exit or kept running in the background.
 - To fully cut network access for a given task, add `--network none` to the `podman run` flags in `scripts/run.sh` (or `start.sh`).
 - Keeping the host free of Claude Code entirely isn't fully achievable long-term: `claude setup-token` is a Claude Code subcommand, so the host needs a temporary install whenever the token needs to be generated or refreshed. Using `ANTHROPIC_API_KEY` instead avoids this, since API keys are generated from the Anthropic Console, not the CLI.
+- `podman/.containerignore` is currently inert by design, not by accident: the build context is scoped to `podman/` (via `-f ./podman/Containerfile ./podman` in the scripts), so `.env`/`.git`/`workspace/` never enter the context in the first place, and the `Containerfile` has no `COPY`/`ADD` in normal operation that would pull context files into the image anyway. It was verified directly rather than left as an assumption: with a dummy `.env` placed in `podman/` and a temporary `COPY . /tmp/context-check` added to the `Containerfile`, the built image's `/tmp/context-check` contained only `Containerfile` and `.containerignore` — `.env` was correctly excluded. That confirms Podman 3.4 honors `.containerignore` correctly. If the build context or `Containerfile` ever changes to actually copy context files into the image, this exclusion is confirmed to hold; the same temporary-`COPY` method can be re-run to re-verify after any such change.
 
 ## How the isolation actually works
 
