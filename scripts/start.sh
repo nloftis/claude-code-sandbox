@@ -11,16 +11,17 @@ cd "$(dirname "$0")/.."
 IMAGE_NAME="claude-code-sandbox"
 CONTAINER_NAME="claude-sandbox"
 
-if docker ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
+if podman ps -a --format '{{.Names}}' | grep -q "^${CONTAINER_NAME}$"; then
   echo "Container '${CONTAINER_NAME}' already exists. Starting it..."
-  docker start "${CONTAINER_NAME}"
+  podman start "${CONTAINER_NAME}"
 else
-  docker build \
+  podman build \
     --build-arg UID="$(id -u)" \
     --build-arg GID="$(id -g)" \
     -t "${IMAGE_NAME}" \
-    ./docker
-  docker run -d \
+    -f ./podman/Containerfile \
+    ./podman
+  podman run -d \
     --name "${CONTAINER_NAME}" \
     --env-file .env \
     -v "$(pwd)/workspace:/home/claude/workspace" \

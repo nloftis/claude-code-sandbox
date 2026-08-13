@@ -7,4 +7,4 @@ set -euo pipefail
 
 CONTAINER_NAME="claude-sandbox"
 
-docker exec -it "${CONTAINER_NAME}" bash
+podman exec -it "${CONTAINER_NAME}" bash
