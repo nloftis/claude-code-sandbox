@@ -23,6 +23,7 @@ podman build \
   ./podman
 
 podman run --rm -it \
+  --userns=keep-id \
   --name claude-sandbox-ephemeral \
   --env-file .env \
   -v "$(pwd)/workspace:/home/claude/workspace" \

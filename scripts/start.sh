@@ -22,6 +22,7 @@ else
     -f ./podman/Containerfile \
     ./podman
   podman run -d \
+    --userns=keep-id \
     --name "${CONTAINER_NAME}" \
     --env-file .env \
     -v "$(pwd)/workspace:/home/claude/workspace" \
