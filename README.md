@@ -26,13 +26,23 @@ claude-code-sandbox/
 │   └── .dockerignore
 ├── scripts/
 │   ├── run.sh       # ephemeral, one-shot: build + drop into `claude` + auto-delete on exit
-│   ├── start.sh      # persistent: build (if needed) + start named container in background
-│   ├── attach.sh      # exec a shell into the running persistent container
-│   └── stop.sh         # stop + remove the persistent container
-├── workspace/            # bind-mount target — project code goes here, not committed
-├── .env.example            # copy to .env and fill in your auth
+│   ├── start.sh     # persistent: build (if needed) + start named container in background
+│   ├── attach.sh    # exec a shell into the running persistent container
+│   └── stop.sh      # stop + remove the persistent container
+├── workspace/       # bind-mount target — project code goes here, not committed
+├── .env.example     # copy to .env and fill in your auth
 └── .gitignore
 ```
+
+## Prerequisites
+
+- **Docker**, installed and running on the host.
+- **An Anthropic account** with Claude Code access (Pro/Max subscription, or API billing set up if using an API key instead).
+- **Claude Code installed on the host, temporarily** — only needed to run `claude setup-token` once (see below). It is the *only* tool that can generate this token; there's no way to get it without the CLI installed somewhere. Once you have a token in `.env`, the host install can be removed — the container is fully self-sufficient after that point. If the token is ever revoked or expires, Claude Code has to go back on the host briefly to mint a new one.
+  ```bash
+  npm install -g @anthropic-ai/claude-code
+  ```
+  (Skip this entirely if using `ANTHROPIC_API_KEY` instead of a setup-token — an API key doesn't require the CLI to generate.)
 
 ## Usage
 
@@ -74,3 +84,44 @@ Use this if you want to step away and come back without losing in-container shel
 - `.env` holds your auth (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`) and is gitignored; never commit it. `.env.example` documents the variable names only.
 - Both the one-off and persistent workflows build from the same `Dockerfile`, so the container itself is identical either way — the only difference is whether it's torn down on exit or kept running in the background. `docker-compose.yml` is just plumbing used by the persistent workflow, not a separate pattern.
 - To fully cut network access for a given task, set `network_mode: none` in `docker/docker-compose.yml` or add `--network none` to the `docker run` flags in `scripts/run.sh`.
+- Keeping the host free of Claude Code entirely isn't fully achievable long-term: `claude setup-token` is a Claude Code subcommand, so the host needs a temporary install whenever the token needs to be generated or refreshed. Using `ANTHROPIC_API_KEY` instead avoids this, since API keys are generated from the Anthropic Console, not the CLI.
+
+## How the isolation actually works
+
+`workspace/` is the only shared space between the host and the container — think of it like a shared data partition between two operating systems on a dual-boot setup. Anything dropped into `workspace/` from the host is visible inside the container, and anything Claude Code creates or edits inside the container shows up on the host immediately, no export step. Everything *outside* that folder stays walled off in both directions.
+
+This isn't enforced by a permission check that Claude Code could talk its way around. Docker containers get their own **mount namespace** — a kernel-level construct that gives every process inside the container its own private view of what filesystem exists. Even though the container shares the host's kernel (unlike a full VM, which has its own kernel), paths outside what's explicitly mounted in simply don't resolve to anything — there's no `/home/<user>` or host `/` visible from inside. A script Claude Code writes and runs inside the container isn't being blocked from reading the host filesystem; those paths never existed from where that process is standing.
+
+The container also runs as a non-root `claude` user (not root), which is a second layer even within the container's own filesystem.
+
+**Caveats — things that would weaken this, none of which this scaffold does:**
+- `--privileged` — disables most container security boundaries. Not used here.
+- Mounting the Docker socket (`-v /var/run/docker.sock:/var/run/docker.sock`) — a classic escape vector, since it lets a container control the host's Docker daemon. Not mounted here.
+- Added capabilities (`--cap-add SYS_ADMIN`, etc.) — grants kernel-level powers beyond the default safe set. None added here.
+- Kernel exploits — since the kernel *is* shared with the host, a container escape via a kernel vulnerability is theoretically possible regardless of container config. This isn't something the Dockerfile controls; it's addressed by keeping Docker and the host kernel patched.
+
+## Why local Docker, not NAS-hosted
+
+If you run Docker elsewhere on your network (e.g., a Synology or other NAS), it's worth being deliberate about running this sandbox on the local workstation instead. Reasons:
+
+- **Interactive latency.** Claude Code is a tight feedback loop — every command, every file edit streams back in near-real-time. Routing that through SSH to a NAS, even on LAN, adds latency that's felt over a long session. Local Docker is effectively instant.
+- **Access friction.** `docker exec` into a local container is one command. A NAS-hosted container means SSH in first, then run the Docker command, then you're in — an extra hop and extra auth step for something done dozens of times per session.
+- **Network segmentation adds real friction, not just inconvenience.** If your NAS sits on a separate VLAN/segment from your workstation, firewall rules between segments may restrict or complicate that SSH path — meaning this isn't just "more steps," it could mean opening firewall rules just to support a dev workflow.
+- **Resource fit.** A NAS is usually tuned for its actual job (file serving, backups, monitoring stack, etc.). An AI coding agent running compile/test/lint loops is a bursty, CPU/memory-churny workload that competes with those services rather than complementing them.
+- **GPU access, if relevant.** If you ever want to pair Claude Code with a local LLM setup, that only works on a machine with a GPU — most NAS units don't have one.
+
+The one case where NAS-hosted Docker *would* make sense: an always-on container reachable from multiple devices (e.g., kicking off a session from a laptop away from your desk). That's a different use case — a persistent remote dev environment — than what this repo is set up for.
+
+## Conventions adopted from the Linux Magazine article
+
+The following choices in this scaffold were carried over from *"The Age of AI: AI and Agentic Workflows"* by Keith Hubner (Linux Magazine, Issue 308, July 2026):
+
+- **Node.js 22 base image** and **Python 3 with `pip`/`venv`** installed alongside it, since AI-assisted coding tasks span both ecosystems.
+- **Build-time `UID`/`GID` args** passed to `docker build`, so files Claude Code creates in the mounted workspace are owned by you on the host rather than a generic container UID — no permission fixes needed after a session, and ownership survives image rebuilds.
+- **A dedicated non-root `claude` user**, built at those UID/GID values (the base image's default `node` user is removed first so the UID isn't already taken).
+- **Onboarding pre-seeded** via `{"hasCompletedOnboarding": true}` written into `/home/claude/.claude.json` at build time, so the container doesn't stop to ask first-run setup questions interactively.
+- **Two supported auth paths**: `CLAUDE_CODE_OAUTH_TOKEN` (from running `claude setup-token` on the host, the article's recommended default) or `ANTHROPIC_API_KEY` as an alternative — both wired up via `.env`.
+- **`claude --dangerously-skip-permissions`** as the default launch flag, which avoids being continuously prompted for per-action approval — made safe specifically *because* it's confined to the container rather than run on the host.
+- **Workspace mounted at `/home/claude/workspace`**, matching the article's listings so paths line up if you're following it directly.
+
+What this repo adds on top of the article (which only covers the ephemeral pattern): the persistent-session workflow (`docker-compose.yml`, `start.sh`/`attach.sh`/`stop.sh`), `.dockerignore`, and `.gitignore`/`.env.example` hygiene.
