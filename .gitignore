@@ -1,0 +1,16 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Workspace contents (bind-mount target, not repo content)
+workspace/*
+!workspace/.gitkeep
+
+# Reference material kept locally only - copyrighted, never pushed
+*.pdf
+
+# Misc
+*.log
+node_modules/
+.DS_Store

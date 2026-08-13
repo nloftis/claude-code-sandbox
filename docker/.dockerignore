@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+../workspace/
+.git
+.gitignore
+*.log
+node_modules

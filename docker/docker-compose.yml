@@ -1,0 +1,19 @@
+services:
+  claude-sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: "${HOST_UID:-1000}"
+        GID: "${HOST_GID:-1000}"
+    container_name: claude-sandbox
+    env_file:
+      - ../.env
+    volumes:
+      - ../workspace:/home/claude/workspace
+    # Keeps the container alive with no foreground process so you can
+    # `docker exec` into it whenever you want, and it survives between
+    # sessions until you explicitly tear it down.
+    command: ["tail", "-f", "/dev/null"]
+    # Uncomment to fully cut network access for a given task:
+    # network_mode: none
